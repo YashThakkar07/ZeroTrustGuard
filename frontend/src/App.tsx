@@ -13,6 +13,7 @@ import EmployeeUpload from "./pages/EmployeeUpload";
 import AddUser from "./pages/AddUser";
 import ApprovalsDashboard from "./pages/ApprovalsDashboard";
 import MFASetup from "./pages/MFASetup";
+import WebSecurity from "./pages/WebSecurity";
 
 const queryClient = new QueryClient();
 
@@ -63,6 +64,16 @@ const App = () => (
             element={
               <ProtectedRoute allowedRoles={["admin", "super_admin"]}>
                 <SOCDashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Web Security */}
+          <Route
+            path="/web-security"
+            element={
+              <ProtectedRoute allowedRoles={["admin", "super_admin"]}>
+                <WebSecurity />
               </ProtectedRoute>
             }
           />

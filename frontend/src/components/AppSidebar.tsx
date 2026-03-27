@@ -37,6 +37,7 @@ export function AppSidebar() {
     role === "admin" || role === "super_admin"
       ? [
           { title: "SOC Dashboard", path: "/soc", icon: AlertTriangle },
+          { title: "Web Security", path: "/web-security", icon: ShieldCheck },
           { title: "Activity Logs", path: "/soc", icon: Activity },
           { title: "User Management", path: "/soc/users", icon: Users },
 

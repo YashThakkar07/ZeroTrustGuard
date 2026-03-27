@@ -64,8 +64,8 @@ exports.login = async (req, res) => {
         await user.save();
       } else {
         const blockMessages = {
-          FAILED_ATTEMPTS: "Security Lock: Multiple failed attempts. Account isolated for 24 hours.",
-          ADMIN_BLOCK: "Access Denied: Account suspended by SOC Administrator."
+          FAILED_ATTEMPTS: "Security Lock: Multiple failed attempts. Account isolated for 24 hours. Contact Admin for assistance.",
+          ADMIN_BLOCK: "Access Denied: Account suspended by SOC Administrator. Contact Admin for details."
         };
         return res.status(403).json({ 
           message: blockMessages[user.block_reason] || "Zero Trust Violation: Account Blocked." 

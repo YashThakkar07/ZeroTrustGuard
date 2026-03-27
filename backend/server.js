@@ -11,6 +11,8 @@ const FilePermission = require("./models/FilePermission");
 const ActivityLog = require("./models/ActivityLog");
 require("./models/Alert");
 const AccessRequest = require("./models/AccessRequest");
+require("./models/WebScan");
+require("./models/BlockedIP");
 const TemporaryAccess = require("./models/TemporaryAccess");
 const MfaChangeRequest = require("./models/MfaChangeRequest");
 
@@ -48,6 +50,8 @@ const activityRoutes = require("./routes/activityRoutes");
 const userRoutes = require("./routes/userRoutes");
 const mfaRoutes = require("./routes/mfaRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
+const webSecurityRoutes = require("./routes/webSecurityRoutes");
+const wafMiddleware = require("./modules/webSecurity/wafMiddleware");
 
 const app = express();
 
@@ -59,7 +63,7 @@ app.use(express.json());
 app.use("/uploads", express.static("uploads"));
 
 // Routes
-app.use("/api/auth", authRoutes);
+app.use("/api/auth", wafMiddleware, authRoutes);
 app.use("/api/files", fileRoutes);
 app.use("/api", protectedRoutes);
 app.use("/api/soc", socRoutes);
@@ -69,6 +73,7 @@ app.use("/api/activity-logs", activityRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/mfa", mfaRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/websecurity", wafMiddleware, webSecurityRoutes);
 
 // Test route
 app.get("/", (req, res) => {
