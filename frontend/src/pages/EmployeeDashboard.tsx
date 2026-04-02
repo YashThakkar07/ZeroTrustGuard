@@ -4,6 +4,7 @@ import UserProfileCard from "@/components/UserProfileCard";
 import { Loader2, Download, Lock, FileText, X } from "lucide-react";
 import api from "../api/axios";
 import { PinModal } from "@/components/PinModal";
+import { SecureFileViewer } from "@/components/SecureFileViewer";
 
 interface FileItem {
   id: number;
@@ -19,7 +20,7 @@ const EmployeeDashboard = () => {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  
+
   const [requestModalOpen, setRequestModalOpen] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [reason, setReason] = useState("");
@@ -28,6 +29,9 @@ const EmployeeDashboard = () => {
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [fileToProcess, setFileToProcess] = useState<{id: number, filename: string, originalName: string, action: 'view' | 'download'} | null>(null);
   const [downloadPinError, setDownloadPinError] = useState("");
+
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerFilename, setViewerFilename] = useState<string>("");
 
   useEffect(() => {
     fetchFiles();
@@ -50,6 +54,14 @@ const EmployeeDashboard = () => {
     setPinModalOpen(true);
   };
 
+  const closeViewer = () => {
+    if (viewerUrl) {
+      window.URL.revokeObjectURL(viewerUrl);
+      setViewerUrl(null);
+      setViewerFilename("");
+    }
+  };
+
   const processAction = async (pin: string) => {
     if (!fileToProcess) return;
 
@@ -59,12 +71,13 @@ const EmployeeDashboard = () => {
           responseType: "blob",
           headers: { "x-mfa-pin": pin }
         });
-        
         const mimeType = res.headers['content-type'] || 'application/octet-stream';
         const blob = new Blob([res.data], { type: mimeType });
         const url = window.URL.createObjectURL(blob);
-        window.open(url, "_blank");
         
+        setViewerUrl(url);
+        setViewerFilename(fileToProcess.originalName || fileToProcess.filename);
+
         setPinModalOpen(false);
         setFileToProcess(null);
       } catch (err: any) {
@@ -91,7 +104,7 @@ const EmployeeDashboard = () => {
           responseType: "blob",
           headers: { "x-mfa-pin": pin }
         });
-        
+
         const url = window.URL.createObjectURL(new Blob([res.data]));
         const a = document.createElement("a");
         a.href = url;
@@ -100,7 +113,7 @@ const EmployeeDashboard = () => {
         a.click();
         window.URL.revokeObjectURL(url);
         a.remove();
-        
+
         setPinModalOpen(false);
         setFileToProcess(null);
       } catch (err: any) {
@@ -135,14 +148,14 @@ const EmployeeDashboard = () => {
       alert("Please provide a reason.");
       return;
     }
-    
+
     setRequestLoading(true);
     try {
       await api.post("/api/files/request-access", {
         fileId: selectedFileId,
         reason,
       });
-      
+
       alert("Access requested successfully!");
       setRequestModalOpen(false);
       setSelectedFileId(null);
@@ -165,6 +178,12 @@ const EmployeeDashboard = () => {
         description={`Enter PIN to ${fileToProcess?.action} ${fileToProcess?.originalName || fileToProcess?.filename}`}
       />
       
+      <SecureFileViewer
+        url={viewerUrl}
+        filename={viewerFilename}
+        onClose={closeViewer}
+      />
+
       <main className="flex-1 p-8 relative overflow-y-auto">
         <div className="absolute top-6 right-8 z-50">
           <UserProfileCard />
@@ -204,7 +223,7 @@ const EmployeeDashboard = () => {
                       <Lock className="w-5 h-5 text-warning" />
                     )}
                   </div>
-                  
+
                   <h3 className="font-semibold text-lg truncate mb-1" title={file.originalName || file.filename}>
                     {file.originalName || file.filename}
                   </h3>
