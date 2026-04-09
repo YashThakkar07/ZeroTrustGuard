@@ -17,10 +17,19 @@ export const SecureFileViewer = ({ url, filename, onClose }: SecureFileViewerPro
     if (url) {
       document.body.style.overflow = "hidden";
     }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+
     return () => {
       document.body.style.overflow = "";
+      document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [url]);
+  }, [url, onClose]);
 
   const extension = filename?.split(".").pop()?.toLowerCase();
   
@@ -69,7 +78,7 @@ export const SecureFileViewer = ({ url, filename, onClose }: SecureFileViewerPro
   if (!url) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
       {/* Right-click protection on the container */}
       <div 
         className="bg-card w-full max-w-6xl rounded-lg shadow-lg border border-border flex flex-col relative"
@@ -77,21 +86,32 @@ export const SecureFileViewer = ({ url, filename, onClose }: SecureFileViewerPro
       >
         <div className="flex flex-shrink-0 items-center justify-between p-4 border-b border-border relative z-20 bg-card rounded-t-lg">
           <h2 className="text-xl font-bold truncate">Viewing: {filename || "Document"}</h2>
-          <button
-            onClick={onClose}
-            className="text-muted-foreground hover:text-foreground"
-            title="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-4">
+            {isImage && (
+              <button
+                onClick={() => setIsImageZoomed(!isImageZoomed)}
+                className="text-sm font-medium text-primary hover:text-primary/80 transition-colors bg-secondary/50 hover:bg-secondary px-3 py-1 rounded-md"
+              >
+                {isImageZoomed ? "Zoom Out" : "Toggle Zoom"}
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-muted-foreground hover:text-foreground"
+              title="Close"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Global UI Rule: parent container overflow-auto with fixed h-[80vh] */}
         <div className="relative bg-secondary overflow-auto w-full h-[80vh] flex flex-col">
           
           {loading && (
-            <div className="flex flex-1 items-center justify-center h-full w-full">
+            <div className="flex flex-col flex-1 items-center justify-center h-full w-full gap-3">
               <Loader2 className="w-10 h-10 animate-spin text-primary" />
+              <p className="text-muted-foreground font-medium animate-pulse">JARVIS is decrypting...</p>
             </div>
           )}
 
@@ -100,8 +120,8 @@ export const SecureFileViewer = ({ url, filename, onClose }: SecureFileViewerPro
                <img 
                  src={url} 
                  alt={filename || "Secure Image"} 
-                 className={`${isImageZoomed ? "max-w-none cursor-zoom-out" : "max-w-full h-auto object-contain cursor-zoom-in"} select-none`}
-                 style={{ maxHeight: isImageZoomed ? "none" : "100%" }}
+                 className={`${isImageZoomed ? "max-w-none cursor-zoom-out" : "object-contain cursor-zoom-in"} select-none`}
+                 style={isImageZoomed ? { maxWidth: "none", maxHeight: "none" } : { maxWidth: "100%", maxHeight: "100%" }}
                  onClick={() => setIsImageZoomed(!isImageZoomed)}
                  onDragStart={(e) => e.preventDefault()}
                />
@@ -120,8 +140,8 @@ export const SecureFileViewer = ({ url, filename, onClose }: SecureFileViewerPro
                  .excel-table-wrapper table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 0.875rem; }
                  .excel-table-wrapper td, .excel-table-wrapper th { border-bottom: 1px solid hsl(var(--border)); border-right: 1px solid hsl(var(--border)); padding: 0.5rem; }
                  /* Table Header Stickiness rule */
-                 .excel-table-wrapper tr:first-child td { position: sticky; top: 0; background-color: hsl(var(--card)); z-index: 10; font-weight: bold; border-top: 1px solid hsl(var(--border)); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-                 .excel-table-wrapper tr td:first-child { border-left: 1px solid hsl(var(--border)); }
+                 .excel-table-wrapper tr:first-child td, .excel-table-wrapper tr:first-child th { position: sticky; top: 0; background-color: #0f172a; color: #f8fafc; z-index: 10; font-weight: bold; border-top: 1px solid #1e293b; box-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+                 .excel-table-wrapper tr td:first-child, .excel-table-wrapper tr th:first-child { border-left: 1px solid hsl(var(--border)); }
                `}</style>
                <div className="excel-table-wrapper" dangerouslySetInnerHTML={{ __html: content }} />
              </div>

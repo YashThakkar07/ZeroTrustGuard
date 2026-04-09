@@ -39,6 +39,13 @@ const File = sequelize.define("File", {
   sensitivityLevel: {
     type: DataTypes.ENUM("low", "high", "critical"),
     defaultValue: "low"
+  },
+
+  // Multi-Department targeting — JSON array (e.g., ["IT", "HR"]). ["All Departments"] means visible to all.
+  target_department: {
+    type: DataTypes.JSON,
+    allowNull: true,
+    defaultValue: ["All Departments"]
   }
 
 });

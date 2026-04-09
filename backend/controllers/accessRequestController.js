@@ -130,6 +130,7 @@ exports.approveRequest = async (req, res) => {
 exports.rejectRequest = async (req, res) => {
   try {
     const requestId = req.params.id;
+    const { reason } = req.body;
     const approverId = req.user.id;
 
     const request = await AccessRequest.findByPk(requestId);
@@ -143,6 +144,9 @@ exports.rejectRequest = async (req, res) => {
 
     request.status = "rejected";
     request.approvedBy = approverId;
+    if (reason) {
+      request.admin_comment = reason;
+    }
     await request.save();
 
     const targetUser = await User.findByPk(request.userId);

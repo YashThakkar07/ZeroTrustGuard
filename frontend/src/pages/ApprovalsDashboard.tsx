@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { AppSidebar } from "@/components/AppSidebar";
 import UserProfileCard from "@/components/UserProfileCard";
-import { Loader2, CheckCircle, XCircle, Clock, ShieldAlert } from "lucide-react";
+import { Loader2, CheckCircle, XCircle, Clock, ShieldAlert, RefreshCw } from "lucide-react";
 import api from "../api/axios";
 
 interface AccessRequest {
@@ -39,44 +39,69 @@ const ApprovalsDashboard = () => {
   const [mfaRequests, setMfaRequests] = useState<MfaRequest[]>([]);
   
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [processingId, setProcessingId] = useState<number | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // States for duration dropdown
   const [approveDuration, setApproveDuration] = useState<Record<number, string>>({});
   const [approveDownload, setApproveDownload] = useState<Record<number, boolean>>({});
 
-  useEffect(() => {
-    if (activeTab === "access") {
-      fetchRequests();
-    } else {
-      fetchMfaRequests();
-    }
-  }, [activeTab]);
+  // Reject Modal State
+  const [rejectModalOpen, setRejectModalOpen] = useState(false);
+  const [rejectRequestId, setRejectRequestId] = useState<number | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
-  const fetchRequests = async () => {
-    setLoading(true);
+  const fetchRequests = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
     try {
       const res = await api.get("/api/access-requests/pending");
       setRequests(res.data.requests || []);
+      setError("");
     } catch (err: any) {
       setError(err.response?.data?.message || "Network error. Could not fetch requests.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
 
-  const fetchMfaRequests = async () => {
-    setLoading(true);
+  const fetchMfaRequests = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
+    else setRefreshing(true);
     try {
       const res = await api.get("/api/mfa/requests");
       setMfaRequests(res.data || []);
+      setError("");
     } catch (err: any) {
       setError(err.response?.data?.message || "Network error. Could not fetch MFA requests.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
-  };
+  }, []);
+
+  const refreshCurrent = useCallback((silent = false) => {
+    if (activeTab === "access") fetchRequests(silent);
+    else fetchMfaRequests(silent);
+  }, [activeTab, fetchRequests, fetchMfaRequests]);
+
+  // Initial load + re-fetch when tab changes
+  useEffect(() => {
+    refreshCurrent(false);
+  }, [activeTab]);
+
+  // 30-second auto-polling (silent background refresh)
+  useEffect(() => {
+    pollingRef.current = setInterval(() => {
+      refreshCurrent(true);
+    }, 30000);
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [refreshCurrent]);
 
   const handleApprove = async (id: number) => {
     const duration = approveDuration[id] || "1_hour";
@@ -90,14 +115,24 @@ const ApprovalsDashboard = () => {
     } setProcessingId(null);
   };
 
-  const handleReject = async (id: number) => {
-    setProcessingId(id);
+  const openRejectModal = (id: number) => {
+    setRejectRequestId(id);
+    setRejectReason("");
+    setRejectModalOpen(true);
+  };
+
+  const handleRejectSubmit = async () => {
+    if (!rejectRequestId || !rejectReason.trim()) return;
+    setProcessingId(rejectRequestId);
     try {
-      await api.post(`/api/access-requests/${id}/reject`, {});
-      setRequests(requests.filter(req => req.id !== id));
+      await api.post(`/api/access-requests/${rejectRequestId}/reject`, { reason: rejectReason });
+      setRequests(requests.filter(req => req.id !== rejectRequestId));
+      setRejectModalOpen(false);
     } catch (err: any) {
       alert(err.response?.data?.message || "Network error or failure to reject.");
-    } setProcessingId(null);
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   const handleMfaApprove = async (id: number) => {
@@ -132,17 +167,62 @@ const ApprovalsDashboard = () => {
     <div className="flex min-h-screen bg-background text-foreground">
       <AppSidebar />
       
+      {rejectModalOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="bg-card w-full max-w-md rounded-lg shadow-lg border border-border flex flex-col relative p-6">
+            <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+              <ShieldAlert className="w-5 h-5 text-destructive" /> Reject Request
+            </h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              Please provide a reason for rejecting this access request.
+            </p>
+            <textarea
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              placeholder="e.g. You do not have permission for this file..."
+              className="w-full h-32 p-3 bg-background border border-border rounded-md text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRejectModalOpen(false)}
+                className="px-4 py-2 rounded-md bg-secondary hover:bg-secondary/80 transition text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRejectSubmit}
+                disabled={processingId === rejectRequestId || !rejectReason.trim()}
+                className="px-4 py-2 bg-destructive text-destructive-foreground rounded-md hover:bg-destructive/90 transition text-sm font-medium disabled:opacity-50 flex items-center gap-2"
+              >
+                {processingId === rejectRequestId ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                Confirm Reject
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="flex-1 p-8 relative overflow-y-auto">
         <div className="absolute top-6 right-8 z-50">
           <UserProfileCard />
         </div>
 
         <div className="max-w-5xl mx-auto mt-4">
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold">Admin Approvals</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Manage pending requests for your organization.
-            </p>
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold">Admin Approvals</h1>
+              <p className="text-sm text-muted-foreground mt-1">
+                Manage pending requests for your organization.
+              </p>
+            </div>
+            <button
+              onClick={() => refreshCurrent(false)}
+              disabled={loading || refreshing}
+              className="mr-14 px-4 py-2 rounded-md bg-secondary border border-border text-sm text-foreground hover:bg-secondary/80 transition-colors inline-flex items-center gap-2 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+              Refresh
+            </button>
           </div>
 
           {/* Tabs */}
@@ -256,7 +336,7 @@ const ApprovalsDashboard = () => {
                         Approve
                       </button>
                       <button
-                        onClick={() => handleReject(req.id)}
+                        onClick={() => openRejectModal(req.id)}
                         disabled={processingId === req.id}
                         className="flex-1 py-2 bg-destructive/10 text-destructive border border-destructive/20 hover:bg-destructive/20 rounded-md transition text-xs font-semibold flex items-center justify-center gap-1 disabled:opacity-50"
                       >

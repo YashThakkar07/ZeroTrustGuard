@@ -10,6 +10,10 @@ const WebScan = sequelize.define("WebScan", {
     type: DataTypes.STRING,
     defaultValue: "COMPLETED"
   },
+  scan_type: {
+    type: DataTypes.STRING,
+    allowNull: true
+  },
   vulnerabilities: {
     type: DataTypes.JSON,
     allowNull: true

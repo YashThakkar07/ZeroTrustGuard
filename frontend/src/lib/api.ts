@@ -10,11 +10,12 @@ export const accessApi = {
 };
 
 export const socApi = {
-  getAlerts: () => api.get("/api/security/alerts"), // Updated from /api/soc/alerts
+  getAlerts: (params?: any) => api.get("/api/security/alerts", { params }), // Updated from /api/soc/alerts
   updateAlert: (id: string) => api.patch(`/api/security/alerts/${id}/resolve`),
-  getLogs: () => api.get("/api/activity-logs"), // Updated from /api/soc/logs
-  getSocFiles: () => api.get("/api/files/all"),
-  getDashboardStats: () => api.get("/api/dashboard/stats"),
+  rejectAlert: (id: string, comment: string) => api.patch(`/api/security/alerts/${id}/reject`, { admin_comment: comment }),
+  getLogs: (params?: any) => api.get("/api/activity-logs", { params }), // Updated from /api/soc/logs
+  getSocFiles: (params?: any) => api.get("/api/files/all", { params }),
+  getDashboardStats: (params?: any) => api.get("/api/dashboard/stats", { params }),
 };
 
 export default api;

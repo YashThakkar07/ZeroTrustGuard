@@ -5,6 +5,7 @@ const ActivityLog = require("../models/ActivityLog");
 const AccessRequest = require("../models/AccessRequest");
 const { Op } = require("sequelize");
 const path = require("path");
+const fs = require("fs");
 
 // Upload File
 exports.uploadFile = async (req, res) => {
@@ -51,7 +52,19 @@ exports.uploadFile = async (req, res) => {
     }
 
     const user = await User.findByPk(userId);
-    const department = user ? user.department : null;
+    const departmentStr = user ? user.department : null;
+
+    // Handle multi-department target
+    let targetDepartments = ["All Departments"];
+    if (req.body.targetDepartments) {
+      try {
+        targetDepartments = JSON.parse(req.body.targetDepartments);
+      } catch (e) {
+        targetDepartments = Array.isArray(req.body.targetDepartments) ? req.body.targetDepartments : [req.body.targetDepartments];
+      }
+    } else if (req.body.targetDepartment) {
+      targetDepartments = [req.body.targetDepartment];
+    }
 
     // Create file
     const createdFile = await File.create({
@@ -61,7 +74,8 @@ exports.uploadFile = async (req, res) => {
       uploadedBy: userId,
       allowedRoles,
       sensitivityLevel,
-      department
+      department: departmentStr,
+      target_department: targetDepartments
     });
 
     const file = await File.findByPk(createdFile.id, {
@@ -78,7 +92,7 @@ exports.uploadFile = async (req, res) => {
       userId,
       action: "file_upload",
       fileId: createdFile.id,
-      department: department,
+      department: departmentStr,
       resource: req.file.filename,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"]
@@ -110,13 +124,56 @@ exports.getAllFiles = async (req, res) => {
       return res.status(403).json({ message: "Access denied. Admins only." });
     }
 
+    const { timeRange, startDate, endDate, department, searchEmail } = req.query;
+    const { Op } = require("sequelize");
+
+    let dateFilter = null;
+    const now = new Date();
+
+    if (timeRange) {
+      if (timeRange === "24_hours") {
+        dateFilter = { [Op.gte]: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
+      } else if (timeRange === "7_days") {
+        dateFilter = { [Op.gte]: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+      } else if (timeRange === "3_months") {
+        dateFilter = { [Op.gte]: new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000) };
+      } else if (timeRange === "1_year") {
+        dateFilter = { [Op.gte]: new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000) };
+      } else if (timeRange === "custom" && startDate && endDate) {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        dateFilter = { [Op.between]: [start, end] };
+      }
+    }
+
+    const baseConditions = [];
+    if (dateFilter) baseConditions.push({ createdAt: dateFilter });
+
+    if (department) {
+      baseConditions.push({
+        [Op.or]: [
+          { department: department },
+          { '$User.department$': department }
+        ]
+      });
+    }
+
+    const whereClause = baseConditions.length > 0 ? { [Op.and]: baseConditions } : {};
+
+    const includeUser = {
+      model: User,
+      attributes: ["id", "email", "name", "role", "department"]
+    };
+
+    if (searchEmail) {
+      includeUser.where = { email: { [Op.like]: `%${searchEmail}%` } };
+      includeUser.required = true;
+    }
+
     const files = await File.findAll({
-      include: [
-        {
-          model: User,
-          attributes: ["id", "email", "name", "role", "department"]
-        }
-      ],
+      where: whereClause,
+      include: [includeUser],
       order: [["createdAt", "DESC"]]
     });
 
@@ -147,7 +204,6 @@ exports.getMyFiles = async (req, res) => {
     }
 
     const files = await File.findAll({
-      where: { department: userDept },
       include: [
         {
           model: User,
@@ -157,8 +213,15 @@ exports.getMyFiles = async (req, res) => {
       order: [["createdAt", "DESC"]]
     });
 
+    // Filter in JS for robustness across DB engines (JSON logic)
+    const filteredFiles = files.filter(f => {
+      const targets = f.target_department;
+      if (!targets || !Array.isArray(targets)) return true; // Fallback
+      return targets.includes("All Departments") || targets.includes(userDept);
+    });
+
     const now = new Date();
-    const fileIds = files.map(f => f.id);
+    const fileIds = filteredFiles.map(f => f.id);
     let tempAccesses = [];
     
     if (fileIds.length > 0) {
@@ -173,7 +236,7 @@ exports.getMyFiles = async (req, res) => {
 
     const tempAccessMap = new Set(tempAccesses.map(ta => ta.fileId));
 
-    const enrichedFiles = files.map(f => {
+    const enrichedFiles = filteredFiles.map(f => {
       let canView = false;
       let canDownload = false;
 
@@ -390,5 +453,92 @@ exports.viewFile = async (req, res) => {
   } catch (error) {
     console.error("View error:", error);
     res.status(500).json({ message: "Viewing failed" });
+  }
+};
+
+// Delete File (Admin only)
+exports.deleteFile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    if (req.user.role !== "admin" && req.user.role !== "super_admin") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const file = await File.findByPk(id);
+    if (!file) return res.status(404).json({ message: "File not found" });
+
+    // 0. Cleanup related records manually to avoid ForeignKeyConstraintErrors
+    // (Manual CASCADE instead of DB-level trigger)
+    await AccessRequest.destroy({ where: { fileId: id } });
+    await TemporaryAccess.destroy({ where: { fileId: id } });
+
+    const filename = file.filename;
+    // Specifically target the uploads directory. Note: controller is in backend/controllers
+    const filePath = path.join(__dirname, "..", "..", "uploads", filename);
+    
+    // 1. Delete physical file first
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+        console.log(`[STORAGE] Physically deleted: ${filename}`);
+      } else {
+        console.warn(`[STORAGE] File missing on disk: ${filename}. Proceeding to DB removal.`);
+      }
+    } catch (err) {
+      console.error(`[STORAGE] Error unlinking file: ${err.message}`);
+    }
+
+    // 2. Log Action
+    await ActivityLog.create({
+      userId,
+      action: "FILE_DELETE",
+      resource: `File [${file.originalName || filename}] deleted by Admin`,
+      ipAddress: req.ip
+    });
+
+    // 3. Delete from DB (Always)
+    await file.destroy();
+
+    res.json({ message: "File deleted successfully" });
+  } catch (error) {
+    console.error("Delete error:", error);
+    res.status(500).json({ message: "Deletion failed" });
+  }
+};
+
+// Update File Permissions (Admin Override)
+exports.updateFilePermissions = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { targetDepartments, allowedRoles } = req.body;
+    const userId = req.user.id;
+
+    if (req.user.role !== "admin" && req.user.role !== "super_admin") {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    const file = await File.findByPk(id);
+    if (!file) return res.status(404).json({ message: "File not found" });
+
+    // Update
+    if (targetDepartments) file.target_department = targetDepartments;
+    if (allowedRoles) file.allowedRoles = allowedRoles;
+
+    await file.save();
+
+    // Log Action
+    await ActivityLog.create({
+      userId,
+      action: "FILE_PERM_UPDATE",
+      resource: `Admin modified permissions for file [${file.originalName || file.filename}]`,
+      ipAddress: req.ip
+    });
+
+    res.json({ message: "Permissions updated successfully", file });
+  } catch (error) {
+    console.error("Update permissions error:", error);
+    res.status(500).json({ message: "Update failed" });
   }
 };

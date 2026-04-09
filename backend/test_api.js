@@ -1,41 +1,21 @@
-const http = require('http');
+const axios = require('axios');
+const fs = require('fs');
+const jwt = require('jsonwebtoken');
 
-const req = http.request({
-  hostname: 'localhost',
-  port: 5000,
-  path: '/api/auth/login',
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' }
-}, res => {
-  let body = '';
-  res.on('data', d => body += d);
-  res.on('end', () => {
+(async () => {
     try {
-      const data = JSON.parse(body);
-      const token = data.ztg_token || data.tempToken;
-      console.log("Token response:", data);
-      
-      if (!token) {
-        console.log("No token acquired. Exiting.");
-        return;
-      }
-      
-      const getReq = http.request({
-        hostname: 'localhost',
-        port: 5000,
-        path: '/api/files/my-files',
-        method: 'GET',
-        headers: { 'Authorization': 'Bearer ' + token }
-      }, getRes => {
-        let getBody = '';
-        getRes.on('data', d => getBody += d);
-        getRes.on('end', () => console.log("Files response:", getRes.statusCode, getBody));
-      });
-      getReq.end();
-    } catch (e) {
-      console.error("Failed to parse login:", body);
+        const token = jwt.sign({ id: 1, role: 'admin' }, process.env.JWT_SECRET || 'zerotrust_secret_key_2024', { expiresIn: '1h' });
+        
+        const res = await axios.get('http://localhost:5000/api/security/alerts', {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
+        });
+        fs.writeFileSync('test_alerts.json', JSON.stringify(res.data, null, 2));
+        console.log("Success");
+    } catch(err) {
+        fs.writeFileSync('test_alerts.json', JSON.stringify({ error: err.response?.data || err.message }, null, 2));
+        console.log("Error");
     }
-  });
-});
-req.write(JSON.stringify({ email: 'it.staff1@ztg.com', password: 'password123' }));
-req.end();
+    process.exit();
+})();

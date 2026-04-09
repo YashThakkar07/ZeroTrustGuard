@@ -11,6 +11,7 @@ interface FileItem {
   filename: string;
   originalName?: string;
   department: string;
+  target_department?: string;
   canView: boolean;
   canDownload: boolean;
   createdAt: string;
@@ -19,7 +20,11 @@ interface FileItem {
 const EmployeeDashboard = () => {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useState("")
+  const [userDept, setUserDept] = useState<string>("");
+
+  const [activeTab, setActiveTab] = useState<"files" | "history">("files");
+  const [history, setHistory] = useState<any[]>([]);
 
   const [requestModalOpen, setRequestModalOpen] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
@@ -34,15 +39,36 @@ const EmployeeDashboard = () => {
   const [viewerFilename, setViewerFilename] = useState<string>("");
 
   useEffect(() => {
-    fetchFiles();
-  }, []);
+    if (activeTab === "files") {
+      fetchFiles();
+    } else {
+      fetchHistory();
+    }
+  }, [activeTab]);
 
   const fetchFiles = async () => {
+    setLoading(true);
     try {
       const res = await api.get("/api/files/my-files");
       setFiles(res.data.files);
+      // Infer department from first file or profile
+      if (res.data.files?.length > 0 && !userDept) {
+        setUserDept(res.data.files[0].department || "");
+      }
     } catch (err: any) {
       setError(err.response?.data?.message || "Network error. Could not fetch files.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchHistory = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get("/api/access-requests/my-requests");
+      setHistory(res.data.requests || []);
+    } catch (err: any) {
+      setError(err.response?.data?.message || "Network error. Could not fetch history.");
     } finally {
       setLoading(false);
     }
@@ -190,11 +216,35 @@ const EmployeeDashboard = () => {
         </div>
 
         <div className="max-w-4xl mx-auto mt-4">
-          <div className="mb-8">
+          <div className="mb-6">
             <h1 className="text-2xl font-bold">Department File Access</h1>
             <p className="text-sm text-muted-foreground mt-1">
-              View and request access to files in your department.
+              View target files or track your request history.
             </p>
+          </div>
+
+          {/* Tabs */}
+          <div className="flex border-b border-border mb-6">
+            <button
+              className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
+                activeTab === "files"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+              }`}
+              onClick={() => setActiveTab("files")}
+            >
+              Available Files
+            </button>
+            <button
+              className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${
+                activeTab === "history"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+              }`}
+              onClick={() => setActiveTab("history")}
+            >
+              Request History
+            </button>
           </div>
 
           {error && (
@@ -207,11 +257,15 @@ const EmployeeDashboard = () => {
             <div className="flex justify-center mt-20">
               <Loader2 className="animate-spin w-8 h-8 text-primary" />
             </div>
-          ) : files.length === 0 ? (
+          ) : activeTab === "files" && files.length === 0 ? (
             <div className="text-center p-10 bg-secondary/50 rounded-lg border border-border">
               <p className="text-muted-foreground">No files found for your department.</p>
             </div>
-          ) : (
+          ) : activeTab === "history" && history.length === 0 ? (
+            <div className="text-center p-10 bg-secondary/50 rounded-lg border border-border">
+              <p className="text-muted-foreground">No access requests found.</p>
+            </div>
+          ) : activeTab === "files" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {files.map((file) => (
                 <div key={file.id} className="glass-card p-6 border border-border flex flex-col">
@@ -227,9 +281,26 @@ const EmployeeDashboard = () => {
                   <h3 className="font-semibold text-lg truncate mb-1" title={file.originalName || file.filename}>
                     {file.originalName || file.filename}
                   </h3>
-                  <p className="text-xs text-muted-foreground mb-4">
+                  <p className="text-xs text-muted-foreground mb-2">
                     Added: {new Date(file.createdAt).toLocaleDateString()}
                   </p>
+
+                  {/* Visibility badge */}
+                  {(() => {
+                    const tg = file.target_department || "All Departments";
+                    const visColors: Record<string, string> = {
+                      "All Departments": "bg-emerald-900/40 text-emerald-400 border border-emerald-500/50",
+                      "IT":              "bg-cyan-900/40 text-cyan-400 border border-cyan-500/50",
+                      "HR":              "bg-purple-900/40 text-purple-400 border border-purple-500/50",
+                      "ACCOUNTS":        "bg-amber-900/40 text-amber-400 border border-amber-500/50",
+                      "MARKETING":       "bg-pink-900/40 text-pink-400 border border-pink-500/50",
+                    };
+                    return (
+                      <span className={`inline-block mb-3 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${visColors[tg] || "bg-secondary text-foreground"}`}>
+                        {tg === "All Departments" ? "🌐 All Depts" : `🔒 ${tg} only`}
+                      </span>
+                    );
+                  })()}
 
                   <div className="mt-auto pt-4 border-t border-border flex gap-2">
                     {file.canView ? (
@@ -263,6 +334,50 @@ const EmployeeDashboard = () => {
                   </div>
                 </div>
               ))}
+            </div>
+          ) : (
+            <div className="glass-card border border-border rounded-lg overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-muted-foreground uppercase bg-secondary/50">
+                    <tr>
+                      <th className="px-6 py-4 font-medium">Request ID</th>
+                      <th className="px-6 py-4 font-medium">File Name</th>
+                      <th className="px-6 py-4 font-medium">Department</th>
+                      <th className="px-6 py-4 font-medium">Date</th>
+                      <th className="px-6 py-4 font-medium">Status</th>
+                      <th className="px-6 py-4 font-medium">Reason</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {history.map((req) => (
+                      <tr key={req.id} className="hover:bg-secondary/30 transition-colors">
+                        <td className="px-6 py-4 font-mono text-xs text-muted-foreground">#{req.id}</td>
+                        <td className="px-6 py-4 font-medium">{req.File?.filename || "Unknown File"}</td>
+                        <td className="px-6 py-4">{req.File?.department || "N/A"}</td>
+                        <td className="px-6 py-4 text-xs text-muted-foreground">{new Date(req.createdAt).toLocaleString()}</td>
+                        <td className="px-6 py-4">
+                          <span 
+                            className={`px-2 py-1 rounded text-xs font-semibold ${
+                              req.status === "rejected" ? "bg-destructive/20 text-destructive" :
+                              req.status === "approved" ? "bg-success/20 text-success" : 
+                              "bg-warning/20 text-warning"
+                            }`}
+                          >
+                            {req.status.toUpperCase()}
+                          </span>
+                        </td>
+                        <td 
+                          className="px-6 py-4 max-w-[200px] truncate text-xs text-muted-foreground"
+                          title={req.status === "rejected" && req.admin_comment ? req.admin_comment : undefined}
+                        >
+                          {req.status === "rejected" ? req.admin_comment || "No reason provided" : "-"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

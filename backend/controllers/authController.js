@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const ActivityLog = require("../models/ActivityLog");
 const Alert = require("../models/Alert");
+const { Op } = require("sequelize");
 
 // =======================
 // REGISTER (FIXED)
@@ -61,6 +62,38 @@ exports.login = async (req, res) => {
         user.login_failed_attempts = 0;
         user.blocked_until = null;
         user.block_reason = null;
+
+        // Resolve previous block logs in ActivityLog
+        await ActivityLog.update(
+          { status: "RESOLVED", resolved: true },
+          { where: { userId: user.id, action: { [Op.in]: ["ADMIN_BLOCK", "ACCOUNT_LOCKOUT"] } } }
+        );
+
+        // Resolve previous alerts in Alert table
+        await Alert.update(
+          { status: "RESOLVED" },
+          { where: { userId: user.id, status: { [Op.ne]: "RESOLVED" } } }
+        );
+
+        await ActivityLog.create({
+          userId: user.id,
+          riskScore: 10,
+          action: "ACCOUNT_UNBLOCK",
+          status: "RESOLVED",
+          department: user.department,
+          resource: `System: Automatic 24-hour block expired for ${user.email}`,
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"]
+        });
+
+        // Sync strictly with Alert model as requested
+        await Alert.create({
+          userId: user.id,
+          riskScore: 10,
+          reason: `System: Automatic 24-hour block expired for ${user.email}`,
+          status: "RESOLVED"
+        });
+
         await user.save();
       } else {
         const blockMessages = {

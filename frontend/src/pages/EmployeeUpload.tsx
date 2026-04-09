@@ -18,6 +18,15 @@ const [allowStaff, setAllowStaff] = useState(true);
 const [allowSenior, setAllowSenior] = useState(true);
 
 const [sensitivity, setSensitivity] = useState("low");
+const [targetDepartments, setTargetDepartments] = useState<string[]>(["All Departments"]);
+
+// Fetch user's own department to pre-select the dropdown
+useEffect(() => {
+  api.get("/api/auth/profile").then(res => {
+    const dept = res.data?.user?.department || res.data?.department || "";
+    if (dept) setTargetDepartments([dept]);
+  }).catch(() => {}); // silent fail — default stays "All Departments"
+}, []);
 
 useEffect(() => {
   if (isIntern) {
@@ -58,6 +67,7 @@ formData.append("allowIntern", String(allowIntern));
 formData.append("allowStaff", String(allowStaff));
 formData.append("allowSenior", String(allowSenior));
 formData.append("sensitivityLevel", sensitivity);
+formData.append("targetDepartments", JSON.stringify(targetDepartments));
 
 try {
 
@@ -66,6 +76,7 @@ try {
   alert(res.data?.message || "File uploaded successfully");
 
   setFile(null);
+  setTargetDepartments(["All Departments"]); // Reset to default after upload
 
 } catch (error: any) {
 
@@ -183,6 +194,50 @@ return (
 
         </select>
 
+      </div>
+
+      {/* TARGET DEPARTMENT */}
+      <div>
+        <label className="text-sm text-muted-foreground block mb-2">
+          Visibility (Target Departments)
+        </label>
+        
+        <div className="flex flex-wrap gap-2">
+          {["All Departments", "IT", "HR", "ACCOUNTS"].map((dept) => {
+            const isSelected = targetDepartments.includes(dept);
+            return (
+              <button
+                key={dept}
+                type="button"
+                onClick={() => {
+                  if (dept === "All Departments") {
+                    setTargetDepartments(["All Departments"]);
+                  } else {
+                    let newDepts = targetDepartments.filter(d => d !== "All Departments");
+                    if (isSelected) {
+                      newDepts = newDepts.filter(d => d !== dept);
+                      if (newDepts.length === 0) newDepts = ["All Departments"];
+                    } else {
+                      newDepts.push(dept);
+                    }
+                    setTargetDepartments(newDepts);
+                  }
+                }}
+                className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-all ${
+                  isSelected
+                    ? "bg-primary/20 border-primary text-primary"
+                    : "bg-secondary/50 border-border text-muted-foreground hover:border-sidebar-accent"
+                }`}
+              >
+                {dept}
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="text-[11px] text-muted-foreground mt-2">
+          Who can see this file. Selected: {targetDepartments.join(", ")}
+        </p>
       </div>
 
       {/* UPLOAD BUTTON */}

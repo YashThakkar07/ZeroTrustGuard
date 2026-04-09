@@ -37,6 +37,11 @@ const AccessRequest = sequelize.define("AccessRequest", {
   expiresAt: {
     type: DataTypes.DATE,
     allowNull: true
+  },
+
+  admin_comment: {
+    type: DataTypes.TEXT,
+    allowNull: true
   }
 
 });

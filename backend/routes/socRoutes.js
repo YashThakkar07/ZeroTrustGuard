@@ -8,6 +8,7 @@ const Alert = require("../models/Alert");
 const ActivityLog = require("../models/ActivityLog");
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
+const { Op } = require("sequelize");
 
 
 // ===============================
@@ -71,6 +72,38 @@ router.put("/users/:id/toggle-block", verifyToken, requireRole("admin"), async (
       user.block_reason = null;
       user.blocked_until = null;
       user.login_failed_attempts = 0;
+
+      // Resolve previous block logs
+      await ActivityLog.update(
+        { status: "RESOLVED", resolved: true },
+        { where: { userId: user.id, action: { [Op.in]: ["ADMIN_BLOCK", "ACCOUNT_LOCKOUT"] } } }
+      );
+
+      // Resolve in Alert table
+      await Alert.update(
+        { status: "RESOLVED" },
+        { where: { userId: user.id, status: { [Op.ne]: "RESOLVED" } } }
+      );
+
+      // Log the unblock action for SOC Dashboard alerts
+      await ActivityLog.create({
+        userId: user.id,
+        riskScore: 0, // Safe event
+        action: "ACCOUNT_UNBLOCK",
+        status: "RESOLVED",
+        department: user.department,
+        resource: `User manually unblocked by SOC Admin (${req.user.email})`,
+        ipAddress: req.ip,
+        userAgent: req.headers["user-agent"]
+      });
+
+      // Sync strictly with Alert model as requested
+      await Alert.create({
+        userId: user.id,
+        riskScore: 0,
+        reason: `User ${user.email} unblocked by Admin`,
+        status: "RESOLVED"
+      });
     } 
     // Else → Block manually
     else {

@@ -13,6 +13,7 @@ import {
   ShieldCheck
 } from "lucide-react";
 import { useState, useEffect } from "react";
+import api from "../api/axios";
 
 export function AppSidebar() {
 
@@ -21,11 +22,35 @@ export function AppSidebar() {
 
   const [collapsed, setCollapsed] = useState(false);
   const [role, setRole] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
     const storedRole = localStorage.getItem("ztg_role");
     setRole(storedRole);
   }, []);
+
+  // Fetch pending approval count for admin roles
+  useEffect(() => {
+    if (role !== "admin" && role !== "super_admin") return;
+
+    const fetchPending = async () => {
+      try {
+        const [accessRes, mfaRes] = await Promise.allSettled([
+          api.get("/api/access-requests/pending"),
+          api.get("/api/mfa/requests")
+        ]);
+        const accessCount = accessRes.status === "fulfilled"
+          ? (accessRes.value.data.requests || []).length : 0;
+        const mfaCount = mfaRes.status === "fulfilled"
+          ? (mfaRes.value.data || []).length : 0;
+        setPendingCount(accessCount + mfaCount);
+      } catch (_) {}
+    };
+
+    fetchPending();
+    const interval = setInterval(fetchPending, 30000);
+    return () => clearInterval(interval);
+  }, [role]);
 
   const handleLogout = () => {
     localStorage.removeItem("ztg_token");
@@ -44,7 +69,7 @@ export function AppSidebar() {
           // NEW OPTION
           { title: "Add User", path: "/add-user", icon: UserPlus },
           { title: "File Management", path: "/files", icon: Upload },
-          { title: "Approvals", path: "/approvals", icon: ShieldCheck },
+          { title: "Approvals", path: "/approvals", icon: ShieldCheck, badge: pendingCount },
           { title: "MFA Setup", path: "/mfa-setup", icon: Shield },
         ]
       : [
@@ -82,6 +107,7 @@ export function AppSidebar() {
         {navItems.map((item) => {
 
           const isActive = location.pathname === item.path;
+          const badge = (item as any).badge;
 
           return (
             <button
@@ -93,8 +119,15 @@ export function AppSidebar() {
                   : "hover:bg-sidebar-accent"
               }`}
             >
-              <item.icon className="w-4 h-4" />
-              {!collapsed && <span>{item.title}</span>}
+              <item.icon className="w-4 h-4 shrink-0" />
+              {!collapsed && (
+                <span className="flex-1 text-left">{item.title}</span>
+              )}
+              {!collapsed && badge > 0 && (
+                <span className="ml-auto min-w-[20px] h-5 px-1.5 flex items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-bold leading-none">
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
             </button>
           );
 
@@ -123,4 +156,4 @@ export function AppSidebar() {
 
     </aside>
   );
-}
+}

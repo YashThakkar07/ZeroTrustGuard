@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const ActivityLog = require("../models/ActivityLog");
+const Alert = require("../models/Alert");
 const bcrypt = require("bcrypt");
 
 // ... we will append delete user
@@ -35,12 +36,21 @@ exports.deleteUser = async (req, res) => {
 
     // Log the action
     await ActivityLog.create({
-      userId: req.user.id,
-      action: "delete_user",
-      resource: `User ID: ${id} (${userToDelete.email})`,
+      userId: req.user.id, // Must use Admin ID since userToDelete is destroyed!
+      action: "DELETE_USER",
+      riskScore: 100,
+      resource: `User ${userToDelete.email} deleted by Admin`,
       ipAddress: req.ip,
       userAgent: req.headers["user-agent"],
-      status: "SUCCESS"
+      status: "RESOLVED",
+      department: userToDelete.department
+    });
+
+    await Alert.create({
+      userId: req.user.id, 
+      riskScore: 100,
+      reason: `User ${userToDelete.email} deleted by Admin`,
+      status: "RESOLVED"
     });
 
     res.status(200).json({ message: "User deleted successfully." });

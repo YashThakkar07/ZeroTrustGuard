@@ -1,7 +1,11 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const WebScan = require("../../models/WebScan");
-const PDFDocument = require("pdfkit"); 
+const PDFDocument = require("pdfkit");
+
+// Global registry: maps scanId -> nmap child process
+const activeScans = new Map();
+let _scanIdCounter = Date.now();
 
 exports.runScan = async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
@@ -9,17 +13,29 @@ exports.runScan = async (req, res) => {
 
     const scanType = req.body.scanType || "Quick";
     let target = req.body.targetUrl || "localhost";
+    const sessionScanId = ++_scanIdCounter;
     
     // strip http/https for nmap since nmap takes hostname/IP natively
     target = target.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
     let args = [];
+    let scanMessage = `Initializing Nmap Engine for ${scanType} Audit...`;
+
     if (scanType === "Stealth") {
         args = ["-sS", "-T2", target];
     } else if (scanType === "Vuln") {
         args = ["--script", "vuln", target];
     } else if (scanType === "Full") {
         args = ["-p-", "-sV", "-A", "-T4", target]; // -A provides OS + versions without needing strict -O
+    } else if (scanType === "HEADER_AUDIT") {
+        args = ["--script", "http-security-headers", target];
+        scanMessage = `Scanning Web Headers...`;
+    } else if (scanType === "SSL_SCAN" || scanType === "SSL/TLS Scan") {
+        args = ["--script", "ssl-enum-ciphers,ssl-cert", "-p", "443", target];
+        scanMessage = `Analyzing SSL Ciphers...`;
+    } else if (scanType === "CMS_SCAN") {
+        args = ["--script", "http-enum,http-wordpress-enum", target];
+        scanMessage = `Detecting Content Management Systems...`;
     } else { 
         args = ["-T4", "-F", target];
     }
@@ -39,13 +55,27 @@ exports.runScan = async (req, res) => {
         }
     }
 
-    res.write(`[JARVIS] Initializing Nmap Engine for ${scanType} Audit...\n`);
+    res.write(`[JARVIS] ${scanMessage}\n`);
     res.write(`[SCAN] Target acquired: ${target}\n`);
+    res.write(`[SYS] Session ID: ${sessionScanId}\n`);
     res.write(`[SYS] Executing: ${nmapCommand} ${args.join(" ")}\n\n`);
 
+    const scanLabel = {
+        Quick: "Quick Scan",
+        Stealth: "Stealth Scan",
+        Vuln: "Vulnerability Scan",
+        Full: "Full Scan",
+        HEADER_AUDIT: "Header Audit",
+        SSL_SCAN: "SSL/TLS Scan",
+        CMS_SCAN: "CMS Detection"
+    }[scanType] || scanType;
+
     const nmapProcess = spawn(nmapCommand, args, { shell: true });
+    // Store full metadata so stopScan can write the DB record directly
+    activeScans.set(sessionScanId, { proc: nmapProcess, target, scanType, scanLabel });
     let fullOutput = "";
     let handshaken = false;
+    let wasCancelled = false;
 
     nmapProcess.stdout.on('data', (data) => {
         if (!handshaken) {
@@ -68,17 +98,25 @@ exports.runScan = async (req, res) => {
     });
 
     nmapProcess.on('error', (err) => {
+        activeScans.delete(sessionScanId);
         res.write(`[ERROR] Failed to execute Nmap process: ${err.message} (${err.code})\n`);
         res.write(`[SYS] Engine failure. Ensure Nmap is installed locally.\n`);
         res.write(`---FINISHED---\n`);
         res.end(); 
     });
 
-    nmapProcess.on('close', async (code) => {
-        res.write(`\n\n[JARVIS] Nmap Scan terminated with exit code ${code}.\n`);
-        res.write(`[SYS] Parsing results into Central Database...\n`);
+    nmapProcess.on('close', async (code, signal) => {
+        activeScans.delete(sessionScanId);
+        wasCancelled = signal === 'SIGKILL' || signal === 'SIGINT' || code === null;
+        res.write(`[JARVIS] Nmap Scan terminated with exit code ${code}.\n`);
+        if (wasCancelled) {
+          res.write(`[JARVIS] Scan aborted by Admin. Audit trail updated, but no report was generated.\n`);
+        } else {
+          res.write(`[SYS] Parsing results into Central Database...\n`);
+        }
 
         const findings = [];
+        let calculatedRiskScore = 0;
         const lines = fullOutput.split('\n');
         
         lines.forEach(line => {
@@ -94,11 +132,55 @@ exports.runScan = async (req, res) => {
             }
 
             if (line.includes("VULNERABLE:") || line.includes("| _vulnerability") || line.toLowerCase().includes("vulnerable")) {
+               calculatedRiskScore = Math.max(calculatedRiskScore, 90);
                findings.push({
                    severity: "High",
                    type: "Vulnerability Module Alert",
                    endpoint: target,
                    description: line.trim()
+               });
+            }
+
+            const cData = line.match(/(TLSv\d\.\d|SSLv\d\.\d)/);
+            if (line.includes("Grade: C") || line.includes("Grade: D") || line.includes("Grade: F")) {
+               calculatedRiskScore = Math.max(calculatedRiskScore, 85);
+               findings.push({
+                   severity: "High",
+                   type: "Weak Cipher",
+                   endpoint: target,
+                   description: line.trim()
+               });
+            }
+
+            if (line.toLowerCase().includes("expired")) {
+               calculatedRiskScore = Math.max(calculatedRiskScore, 100);
+               findings.push({
+                   severity: "Critical",
+                   type: "Certificate Expiry",
+                   endpoint: target,
+                   description: "SSL Certificate is expired."
+               });
+            }
+
+            if (line.includes("Strict-Transport-Security") || line.includes("Content-Security-Policy")) {
+               if (line.includes("missing") || line.includes("not set")) {
+                  calculatedRiskScore = Math.max(calculatedRiskScore, 70);
+                  findings.push({
+                      severity: "High",
+                      type: "Missing Header",
+                      endpoint: target,
+                      description: "MISSING HEADERS: " + line.trim()
+                  });
+               }
+            }
+
+            if (line.includes("outdated") || line.match(/version\s+[\d\.]+\s*.*(outdated|deprecated)/i)) {
+               calculatedRiskScore = Math.max(calculatedRiskScore, 90);
+               findings.push({
+                   severity: "Critical",
+                   type: "Outdated CMS",
+                   endpoint: target,
+                   description: "OUTDATED CMS: " + line.trim()
                });
             }
         });
@@ -110,16 +192,47 @@ exports.runScan = async (req, res) => {
         const scanResults = {
             target: target,
             scanType: scanType,
+            riskScore: calculatedRiskScore,
             findings
         };
 
+        const scanLabel = {
+            Quick: "Quick Scan",
+            Stealth: "Stealth Scan",
+            Vuln: "Vulnerability Scan",
+            Full: "Full Scan",
+            HEADER_AUDIT: "Header Audit",
+            SSL_SCAN: "SSL/TLS Scan",
+            CMS_SCAN: "CMS Detection"
+        }[scanType] || scanType;
+
+        // Skip persisting if process was force-killed — stopScan already wrote the record
+        if (wasCancelled) {
+            res.write(`[SYS] Stop acknowledged by close event. Audit record already written by stop controller.\n`);
+            res.write('---FINISHED---\n');
+            res.end();
+            return;
+        }
+
         try {
+            // Always save a record — CANCELLED scans still get an audit trail entry
             const newScan = await WebScan.create({
-                status: "COMPLETED",
-                vulnerabilities: scanResults
+                status: wasCancelled ? "CANCELLED" : "COMPLETED",
+                scan_type: scanLabel,
+                vulnerabilities: {
+                    ...scanResults,
+                    // Mark report_path null for cancelled scans so PDF request is blocked
+                    report_path: wasCancelled ? null : undefined,
+                    partial: wasCancelled
+                }
             });
-            res.write(`[JARVIS] Successfully saved configuration to Database (ID: ${newScan.id})\n`);
-            
+
+            if (wasCancelled) {
+                res.write(`[SYS] Partial audit trail saved (ID: ${newScan.id}). No PDF report generated.\n`);
+            } else {
+                res.write(`[JARVIS] Successfully saved configuration to Database (ID: ${newScan.id})\n`);
+            }
+
             res.write('---FINISHED---\n');
             res.write(JSON.stringify({ scanId: newScan.id, results: scanResults }) + "\n");
         } catch (err) {
@@ -202,7 +315,7 @@ exports.generatePdfReport = async (req, res) => {
 
     // Document Metadata Pre-Processing
     const vulns = scan.vulnerabilities || {};
-    const scanProfile = vulns.scanType || "Stealth Scan";
+    const scanProfile = scan.scan_type || vulns.scanType || "Unknown Scan";
     const findings = vulns.findings || [];
     const portFindings = findings.filter(f => f.type === "Network Port");
     const otherFindings = findings.filter(f => f.type !== "Network Port");
@@ -238,6 +351,8 @@ exports.generatePdfReport = async (req, res) => {
     doc.font('Helvetica').fontSize(11).fillColor('#cbd5e1');
     doc.text(`Scan ID: ${scan.id}`);
     doc.text(`Scan Profile: ${scanProfile}`);
+    doc.text(`Scan Type: ${scan.scan_type || scanProfile}`);
+    doc.text(`Status: ${scan.status || 'COMPLETED'}`);
     doc.text(`Target: ${vulns.target || "Unknown"}`);
     const scanDate = new Date(scan.createdAt || scan.scanDate).toLocaleString();
     doc.text(`Completed: ${scanDate}`);
@@ -393,6 +508,88 @@ exports.generatePdfReport = async (req, res) => {
         });
     }
 
+    // --- Dedicated Weak SSL Cipher Section (also for HEADER_AUDIT + SSL_SCAN) ---
+    const weakCipherFindings = otherFindings.filter(f => f.type === "Weak Cipher");
+    const missingHeaderFindings = otherFindings.filter(f => f.type === "Missing Header");
+    const outdatedCmsFindings = otherFindings.filter(f => f.type === "Outdated CMS");
+
+    if (weakCipherFindings.length > 0) {
+        if (doc.y > 600) doc.addPage();
+        doc.fillColor('#ef4444').font('Helvetica-Bold').fontSize(14).text('Weak SSL/TLS Ciphers Detected', 50, doc.y);
+        doc.moveDown(0.5);
+        doc.fillColor('#cbd5e1').font('Helvetica').fontSize(10)
+            .text('The following cipher suites were identified as Grade C, D, or F — they are vulnerable to downgrade or cryptographic attacks.', 50, doc.y, { width: 490 });
+        doc.moveDown();
+        weakCipherFindings.forEach((cf, i) => {
+            if (doc.y > 720) doc.addPage();
+            doc.fillColor('#f97316').font('Helvetica-Bold').text(`${i + 1}. Weak Cipher:`, 50, doc.y, { continued: true });
+            doc.fillColor('#cbd5e1').font('Helvetica').text(` ${cf.description.replace(/\s+/g, ' ').trim()}`);
+        });
+        doc.moveDown();
+    }
+
+    if (missingHeaderFindings.length > 0) {
+        if (doc.y > 600) doc.addPage();
+        doc.fillColor('#f97316').font('Helvetica-Bold').fontSize(14).text('Missing Security Headers', 50, doc.y);
+        doc.moveDown(0.5);
+        doc.fillColor('#cbd5e1').font('Helvetica').fontSize(10)
+            .text('Critical HTTP response headers were absent. These protect against clickjacking, XSS, and protocol downgrades.', 50, doc.y, { width: 490 });
+        doc.moveDown();
+        missingHeaderFindings.forEach((mh, i) => {
+            if (doc.y > 720) doc.addPage();
+            const rawHeader = mh.description.replace('MISSING HEADERS:', '').trim();
+            doc.fillColor('#fbbf24').font('Helvetica-Bold').text(`${i + 1}. Missing Header:`, 50, doc.y, { continued: true });
+            doc.fillColor('#cbd5e1').font('Helvetica').text(` ${rawHeader}`);
+        });
+        doc.moveDown();
+    }
+
+    if (outdatedCmsFindings.length > 0) {
+        if (doc.y > 600) doc.addPage();
+        doc.fillColor('#ef4444').font('Helvetica-Bold').fontSize(14).text('Outdated CMS / Software Detected', 50, doc.y);
+        doc.moveDown(0.5);
+        outdatedCmsFindings.forEach((oc, i) => {
+            if (doc.y > 720) doc.addPage();
+            const rawCms = oc.description.replace('OUTDATED CMS:', '').trim();
+            doc.fillColor('#f97316').font('Helvetica-Bold').text(`${i + 1}. Outdated Component:`, 50, doc.y, { continued: true });
+            doc.fillColor('#cbd5e1').font('Helvetica').text(` ${rawCms}`);
+        });
+        doc.moveDown();
+    }
+
+    // Explicit SSL/TLS Sector Check
+    if (scanProfile === "SSL_SCAN" || scanProfile === "SSL/TLS Scan") {
+        if (doc.y > 600) doc.addPage();
+        doc.fillColor('#10b981').font('Helvetica-Bold').fontSize(14).text('Encryption Strength Analysis', 50, doc.y);
+        doc.moveDown(0.5);
+        doc.fillColor('#cbd5e1').font('Helvetica').fontSize(10).text('This section outlines the resilience of the negotiated cipher suites and the cryptographic validity of the endpoint certificate.', 50, doc.y, { width: 500 });
+        doc.moveDown();
+        
+        const certExpiry = otherFindings.find(f => f.type === "Certificate Expiry");
+        const weakCiphers = otherFindings.filter(f => f.type === "Weak Cipher");
+
+        if (certExpiry) {
+            doc.fillColor('#ef4444').font('Helvetica-Bold').text(`[CRITICAL] ${certExpiry.description}`, 50, doc.y);
+            doc.moveDown();
+        } else {
+            doc.fillColor('#22c55e').font('Helvetica-Bold').text(`[SECURE] Certificate is valid and not objectively expired.`, 50, doc.y);
+            doc.moveDown();
+        }
+
+        if (weakCiphers.length > 0) {
+            doc.fillColor('#f97316').font('Helvetica-Bold').text(`Detected Weak Ciphers (Grade C/D/F):`, 50, doc.y);
+            doc.moveDown(0.5);
+            weakCiphers.forEach(cf => {
+                // Remove extra whitespace from Nmap cipher strings for aesthetic print
+                doc.fillColor('#cbd5e1').font('Helvetica').text(`- ${cf.description.replace(/\s+/g, ' ').trim()}`, 60, doc.y);
+            });
+            doc.moveDown();
+        } else {
+            doc.fillColor('#22c55e').font('Helvetica-Bold').text(`[SECURE] No explicit Grade C, D, or F ciphers detected on active listeners.`, 50, doc.y);
+            doc.moveDown();
+        }
+    }
+
     doc.end();
 
   } catch (error) {
@@ -405,12 +602,104 @@ exports.generatePdfReport = async (req, res) => {
 
 exports.getScans = async (req, res) => {
   try {
+    const { timeRange, targetFilter } = req.query;
+    const { Op } = require("sequelize");
+
+    let whereClause = {};
+    const now = new Date();
+
+    if (timeRange) {
+      if (timeRange === "24_hours") {
+        whereClause.createdAt = { [Op.gte]: new Date(now.getTime() - 24 * 60 * 60 * 1000) };
+      } else if (timeRange === "7_days") {
+        whereClause.createdAt = { [Op.gte]: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) };
+      } else if (timeRange === "30_days") {
+        whereClause.createdAt = { [Op.gte]: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000) };
+      }
+    }
+
+    if (targetFilter) {
+        whereClause.vulnerabilities = {
+            target: { [Op.iLike]: `%${targetFilter}%` }
+        };
+    }
+
     const scans = await WebScan.findAll({
+      where: whereClause,
       order: [['createdAt', 'DESC']]
     });
     res.status(200).json({ scans });
   } catch (error) {
     console.error("Fetch Scans Error:", error);
     res.status(500).json({ error: "Failed to fetch scans" });
+  }
+};
+
+exports.stopScan = async (req, res) => {
+  const { sessionScanId } = req.body;
+
+  // Helper: force-kill a process and destroy its I/O streams
+  const forceKill = (proc) => {
+    try {
+      process.kill(-proc.pid, "SIGKILL");
+    } catch (_) {
+      try { proc.kill("SIGKILL"); } catch (_2) { /* ignore */ }
+    }
+    try { proc.stdout.destroy(); } catch (_) {}
+    try { proc.stderr.destroy(); } catch (_) {}
+  };
+
+  // Helper: write the CANCELLED audit record and return it
+  const writeCancelledRecord = async (target, scanLabel) => {
+    return await WebScan.create({
+      status: "CANCELLED",
+      scan_type: scanLabel,
+      vulnerabilities: {
+        target: target,
+        scanType: scanLabel,
+        riskScore: 0,
+        partial: true,
+        report_path: null,
+        findings: [{ severity: "Info", type: "Scan Cancelled", endpoint: target, description: "Scan was manually terminated by an administrator." }]
+      }
+    });
+  };
+
+  // Resolve the active scan entry — either by session ID or the most recent
+  let key, entry;
+  if (!sessionScanId) {
+    if (activeScans.size === 0) {
+      return res.status(404).json({ message: "No active scan to stop." });
+    }
+    key = [...activeScans.keys()].pop();
+    entry = activeScans.get(key);
+  } else {
+    key = Number(sessionScanId);
+    entry = activeScans.get(key);
+  }
+
+  if (!entry) {
+    return res.status(404).json({ message: "Scan session not found or already completed." });
+  }
+
+  // Kill the process immediately
+  forceKill(entry.proc);
+  activeScans.delete(key);
+
+  // Write audit record synchronously before responding
+  try {
+    const cancelled = await writeCancelledRecord(entry.target, entry.scanLabel);
+    return res.status(200).json({
+      message: "Emergency stop executed. Audit record created.",
+      auditId: cancelled.id,
+      scanType: entry.scanLabel,
+      target: entry.target
+    });
+  } catch (dbErr) {
+    console.error("Failed to write CANCELLED audit record:", dbErr);
+    return res.status(200).json({
+      message: "Process terminated, but audit record failed to save.",
+      error: dbErr.message
+    });
   }
 };

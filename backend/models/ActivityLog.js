@@ -55,8 +55,12 @@ const ActivityLog = sequelize.define("ActivityLog", {
 
   status: {
     type: DataTypes.STRING, // SUCCESS / FAILED
-  }
+  },
 
+  admin_comment: {
+    type: DataTypes.TEXT,
+    allowNull: true
+  }
 }, {
   timestamps: true // ensures createdAt & updatedAt
 });

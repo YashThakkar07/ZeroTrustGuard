@@ -50,4 +50,18 @@ router.post(
   fileController.requestAccess
 );
 
+// Delete file (Admin)
+router.delete(
+  "/:id",
+  authMiddleware,
+  fileController.deleteFile
+);
+
+// Update permissions (Admin)
+router.patch(
+  "/:id/permissions",
+  authMiddleware,
+  fileController.updateFilePermissions
+);
+
 module.exports = router;

@@ -12,4 +12,8 @@ router.get("/alerts", authMiddleware, securityController.getAlerts);
 // Desc: Resolve a security alert (Admin only)
 router.patch("/alerts/:id/resolve", authMiddleware, securityController.resolveAlert);
 
+// Route: PATCH /api/security/alerts/:id/reject
+// Desc: Reject a security alert (Admin only)
+router.patch("/alerts/:id/reject", authMiddleware, securityController.rejectAlert);
+
 module.exports = router;

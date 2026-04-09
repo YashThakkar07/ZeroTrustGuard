@@ -15,6 +15,8 @@ const [allowSenior, setAllowSenior] = useState(true);
 
 const [sensitivity, setSensitivity] = useState("low");
 
+const [targetDepartments, setTargetDepartments] = useState<string[]>(["All Departments"]);
+
 const uploadFile = async () => {
 
 if (!file) {
@@ -29,6 +31,7 @@ formData.append("allowIntern", String(allowIntern));
 formData.append("allowStaff", String(allowStaff));
 formData.append("allowSenior", String(allowSenior));
 formData.append("sensitivityLevel", sensitivity);
+formData.append("targetDepartments", JSON.stringify(targetDepartments));
 
 try {
 
@@ -41,6 +44,7 @@ try {
   setAllowStaff(true);
   setAllowSenior(true);
   setSensitivity("low");
+  setTargetDepartments(["All Departments"]);
 
 } catch (error) {
 
@@ -153,6 +157,52 @@ return (
           <option value="critical">Critical</option>
 
         </select>
+
+      </div>
+
+      {/* TARGET DEPARTMENT */}
+      <div>
+
+        <label className="text-sm text-muted-foreground block mb-2">
+          Target Departments (Select all that apply)
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          {["All Departments", "IT", "HR", "ACCOUNTS"].map((dept) => {
+            const isSelected = targetDepartments.includes(dept);
+            return (
+              <button
+                key={dept}
+                type="button"
+                onClick={() => {
+                  if (dept === "All Departments") {
+                    setTargetDepartments(["All Departments"]);
+                  } else {
+                    let newDepts = targetDepartments.filter(d => d !== "All Departments");
+                    if (isSelected) {
+                      newDepts = newDepts.filter(d => d !== dept);
+                      if (newDepts.length === 0) newDepts = ["All Departments"];
+                    } else {
+                      newDepts.push(dept);
+                    }
+                    setTargetDepartments(newDepts);
+                  }
+                }}
+                className={`px-3 py-2 text-xs font-medium rounded-md border transition-all ${
+                  isSelected
+                    ? "bg-primary/20 border-primary text-primary"
+                    : "bg-secondary/50 border-border text-muted-foreground hover:border-sidebar-accent"
+                }`}
+              >
+                {dept}
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="text-[11px] text-muted-foreground mt-2">
+          Employees in any of the selected departments will be able to see this file.
+        </p>
 
       </div>
 
